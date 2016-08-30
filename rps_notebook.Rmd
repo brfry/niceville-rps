@@ -1,0 +1,569 @@
+---
+title: "RPS data analysis for Niceville WWTF"
+output:
+  word_document: default
+  html_notebook: default
+  html_document: default
+---
+
+<http://www.frecologic.com> 
+
+This document reports the analyses done for the MSWRF WQBEL project. This was last assembled:
+
+`r Sys.time()`
+
+First, run the following code. Also load pander and set options for outputting for proper tables:
+```{r global_options, include = FALSE}  
+
+knitr::opts_chunk$set(fig.width=12, fig.height=6, fig.path='Figs/',
+                      echo=FALSE, warning=FALSE, message=FALSE)
+
+  library(pander)
+  panderOptions("digits", 2) # tell pander to display only 2 decimal points
+  panderOptions("table.split.table", Inf) #tell pander not to split tables, default is 80
+```
+
+make function for geomean and geosd:
+```{r}
+geomean <- function(x, na.rm = FALSE, trim = 0, ...)
+{
+   exp(mean(log(x, ...), na.rm = na.rm, trim = trim, ...))
+}
+ 
+geosd <- function(x, na.rm = FALSE, ...) 
+{
+   exp(sd(log(x, ...), na.rm = na.rm, ...))
+}
+```
+
+```{r}
+# load libraries
+library(dplyr)
+library(tidyr)
+library(broom)
+library(ggplot2)
+library(lubridate)
+library(SiZer)
+# library(vegan)
+
+# settings for shit
+
+```
+
+
+# Background
+FDEP plans to place the creek recieving spray field effluent from Niceville on the study list due to RPS failures. Frydenborg Ecologic was contracted to better characterize the stream, as all previous sampling points were taken frome the same area.
+
+Frydenborg Ecologic sampled five sites along the stream for RPS and canopy cover. These results were combined with previous sampling done by Frydenborg Ecologic, and with sampling conducted by FDEP.
+
+# Methods
+
+## Field
+FDEP RPS protocol was followed.
+
+## Statistical
+The response variable of interest is the percent of RPS scores greater than 4. Most of these analyses are interested in examining RPS response at each transect of the 11 taken during a typical FDEP RPS, though each overall site result is also considered. For transect level analyses, the number of 4, 5, and 6 scores are counted (max of 9), then the percentage is calculated by dividing the count by 9 and multiplying by 100.
+
+Canopy cover was taken with a densiometer, with a maximum of 96 points. Percent canopy cover was calculated by dividing the obverseved number of canopy points out of the maximum of 96, then multiplying by 100.
+
+
+### Data import
+A CSV file containing all RPS observations, along with metadata, was imported into R. Dataframe was manipulated
+```{r}
+rps_df <- read.csv("RPS Data 8-23-16.csv")
+
+wq_df <- read.csv("niceville_wq_data_8-17-16.csv")
+```
+
+### Data cleaning
+
+```{r}
+# wq data
+wq_df_test <- wq_df%>%
+  group_by(Year, Site, Parameter) %>%
+  summarise(geomean = geomean(result), geo_sd = geosd(result), n = n())
+
+
+# make column with rps as numeric instead of factor
+rps_df <- rps_df %>%
+  mutate(rps_num = ifelse(RPS_456 == "N", 0, as.numeric(RPS_456) + 2)) %>%
+  separate(Date, c("Month", "Day", "Year"), remove = FALSE)
+
+rps_df$Transect <- as.factor(rps_df$Transect)
+
+
+# data frame with percent 4,5,6 in each transect
+rps_df_test <- rps_df %>%
+  group_by(agency, Date, Site, Transect) %>%
+  mutate(rps_bin = ifelse(rps_num < 4, 0, 1)) %>%
+  summarise(sum_rps = sum(rps_bin), Canopy = mean(Canopy)) %>%
+  mutate(perc_456 = sum_rps / 9 * 100) %>%
+   mutate(perc_can = Canopy / 96 * 100)
+
+
+# set order of Date
+rps_df_test$Date <- mdy(rps_df_test$Date)
+
+# data frame with distance from bridge. Add 10 meters to each sites distance measure at each transect. 
+rps_df_test2 <- rps_df %>%
+  group_by(agency, Date, Site, Transect, distance_from_bridge_km) %>%
+  mutate(rps_bin = ifelse(rps_num < 4, 0, 1)) %>%
+  summarise(sum_rps = sum(rps_bin), Canopy = mean(Canopy)) %>%
+  mutate(perc_456 = sum_rps / 9 * 100) %>%
+  mutate(perc_can = Canopy / 96 * 100)
+  
+rps_df_test2$Date <- mdy(rps_df_test2$Date)
+
+# Make data frame of rps site percent in order to make regression of distance-site
+rps_df_avg <- rps_df %>%
+  group_by(agency, Date, Site, distance_from_bridge_km) %>%
+  mutate(rps_bin = ifelse(rps_num < 4, 0, 1)) %>%
+  summarise(sum_rps = sum(rps_bin), Canopy = mean(Canopy)) %>%
+  mutate(perc_456 = sum_rps / 99 * 100) %>%
+  mutate(perc_can = Canopy / 96 * 100) %>%
+   separate(Date, c("Month", "Day", "Year"), remove = FALSE)
+  
+rps_df_avg$Date <- mdy(rps_df_avg$Date)
+
+
+
+
+
+
+
+## make df of yearly avg rps and yearly geomean TN.
+wq_df_test$Year <- as.numeric(wq_df_test$Year)
+
+
+wq_df_test_a <- wq_df_test %>%
+  filter(Year > 2014) %>%
+  select(-geo_sd, -n) %>%
+  spread(Parameter, geomean) 
+  
+
+
+rps_df_avg$Year <- as.factor(rps_df_avg$Year)
+
+#wq_df_test$Year <- as.factor(wq_df_test$Year)
+
+
+rps_wq_df <- rps_df_avg %>%
+  group_by(Year, Site) %>%
+  summarise_each(funs(mean)) %>%
+  select(-Month, -Day, -agency) 
+
+rps_wq_df$Year <- as.factor(rps_wq_df$Year)
+wq_df_test_a$Year <- as.factor(wq_df_test_a$Year)
+
+ rps_wq_df <-  full_join(rps_wq_df, wq_df_test_a) 
+
+#spread parameters into columns
+#rps_wq_df <- rps_wq_df %>%
+#  spread(Parameter, geomean)
+
+```
+
+
+
+# Evaluating hypotheses for RPS response
+
+## Excess nitrogen leads to RPS 
+FDEP wants to list Deer Moss Creek for failing the RPS, blaming the excess TN coming from the spray field. If this is the case, one should see a relationship between failure of the RPS and amount of nitrogen in the water. A linear regression using the average RPS percent 4-6 per site along with the annual geometric mean of TN was performed. This resulted in 4 data points: the upstream control of Deer Moss Creek, and the three streams that recieve effluent. Only Deer Moss Creek has any sort of RPS response. There is no relationship apparent between nutrient level in the stream and RPS observed.
+ 
+
+## lack of Canopy cover leads to RPS
+
+```{r}
+# Combine RPS measures with nutrient water quality measures. Look at mlr using predictors of canopy, distance to road, agency, nitrogen.
+
+
+```
+
+## Check assumptions for linear regression
+```{r}
+# assumptions are: linear relationship, multivariate normality, no or little multicollinearity, no auto-correlation, homoscedasticity
+
+# check skewness of data visually:
+rps_df_test2 %>%
+  mutate(dummy_var = "dum") %>%  
+  ggplot(aes(x = dummy_var, y = perc_can )) +
+  geom_boxplot()
+
+rps_df_test2 %>%
+  ggplot(aes(x = Site, y = perc_can )) +
+  geom_boxplot()
+
+rps_df_test2 %>%
+  mutate(dummy_var = "dum") %>%  
+  ggplot(aes(x = dummy_var, y = perc_456 )) +
+  geom_boxplot()
+
+rps_df_test2 %>%
+  ggplot(aes(x = Site, y = perc_456 )) +
+  geom_boxplot()
+
+rps_df_test2 %>%
+  ggplot(aes(x = Transect, y = perc_456, fill = Site)) +
+  geom_boxplot() +
+  facet_grid(.~Site)
+
+rps_df_test2 %>%
+  ggplot(aes(x = Transect, y = perc_can, fill = Site)) +
+  geom_boxplot() +
+  facet_grid(.~Site)
+
+# histograms
+#qqPlot(fit, main="QQ Plot")
+```
+
+
+
+### Data exploration of DM 3
+Exploratory plots of site DM 3, the only site sampled by both Frydenborg Ecologic and FDEP.
+
+```{r}
+# compare DM3 by agency
+#rps_df %>%
+#  ggplot(aes(x = Site, y = rps_num, fill = agency)) +
+#  geom_bar(stat = "identity", position = "dodge") +
+#  facet_wrap(~ Transect)
+
+# comapre percent 456 at each transect
+#rps_df_test %>%
+#  ggplot(aes(x = Site, y = perc_456, fill = Transect)) +
+#  geom_boxplot()
+
+# DM 3 only, percent 456 at each transect over time by sampler
+rps_df_test %>%
+  filter(Site == "DM 3") %>%
+  ggplot(aes(x = as.factor(Date), y = perc_456, fill = agency)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ Transect, nrow = 2) +
+ # facet_grid(Transect ~ .) +
+  theme(axis.text.x = element_text(angle = 45, size = 6)) +
+  ggtitle("Site DM 3 RPS measures") +
+  labs(x = "Sampling Date", y = "Percent RPS 4-6") +
+  guides(fill = guide_legend(title = "Entity"))
+
+rps_df_test %>%
+  filter(Site == "DM 3") %>%
+  ggplot(aes(x = as.factor(Date), y = perc_456, fill = Transect)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  ggtitle("Site DM 3") +
+   ggtitle("Site DM 3") +
+  labs(x = "Sampling Date", y = "Percent RPS 4-6")
+  
+# distance from bridge
+#rps_df_test2 %>%
+ # filter(Site == "DM 3") %>%
+#  ggplot(aes(x = Site, y = perc_456, fill = distance_from_bridge_km)) +
+#  geom_bar(stat = "identity", position = "dodge") +
+#  facet_wrap(~ agency, ncol = 1)
+  
+```
+
+
+# Results
+
+## relationship between canopy cover and rps at each transect
+
+The percent of 4, 5, and 6 algea was determined at each transect. This is then matched to the canopy reading determined at the transect using a densiometer. A linear relationship is examined.
+
+```{r}
+# all sites
+rps_df_test %>%
+ggplot(aes(x = perc_can, y = perc_456, color = Site)) +
+geom_point(position = "jitter") +
+  stat_smooth(method = "lm", aes(group = 1)) +
+   ggtitle("Percent RPS explained by Percent Canopy") +
+  labs(x = "Percent Canopy", y = "Percent RPS 4-6")
+
+# removing all rps 0 points:
+rps_nozero <- rps_df_test %>%
+  filter(perc_456 != 0) 
+  
+  rps_nozero %>%
+ggplot(aes(x = perc_can, y = perc_456, color = Site)) +
+geom_point(position = "jitter") +
+  stat_smooth(method = "lm", aes(group = 1)) +
+   ggtitle("Percent RPS explained by Percent Canopy - no zero RPS values") +
+  labs(x = "Percent Canopy", y = "Percent RPS 4-6")
+
+
+```
+
+R squared and other stats for percent 4, 5, 6 explained by percent canopy coverage
+
+```{r}
+rps_lm <- lm(perc_456 ~ perc_can, data = rps_df_test)
+pander(summary(rps_lm))
+
+# check test assumptions
+par(mfrow = c(2,2))
+plot(rps_lm)
+
+# appears to be more tightly grouped residuals verse spread in the top left graph, indicating potential violation. Try a log transformation:
+rps_df_test_log <- rps_df_test %>%
+  mutate(perc_456_log = log(perc_456)+1)
+         
+rps_lm_log <- lm(perc_456 ~ perc_can, data = rps_df_test_log)
+par(mfrow = c(2,2))
+plot(rps_lm_log)
+
+# log transformation does not appear to make much of a difference.
+# conclusion: while some uneveness is there, the line shows a linear fit, indicating the correct model was used (as oppossed to a parabella for instance). 
+
+# more info on interpretting diagnostic plots: http://strata.uga.edu/6370/rtips/regressionPlots.html
+
+# also: http://data.library.virginia.edu/diagnostic-plots/
+
+
+# lm for data with zero points removed
+rps_lmzero <- lm(perc_456 ~ perc_can, data = rps_nozero)
+pander(summary(rps_lmzero))
+
+# check test assumptions
+par(mfrow = c(2,2))
+plot(rps_lmzero)
+
+```
+
+
+```{r}
+# calculate prediction for how much canopy cover to have before RPS not met
+#?????
+```
+
+
+Examining site DM 3 data only.
+
+```{r}
+# DM 3 only
+rps_df_test %>%
+  filter(Site == "DM 3") %>%
+ggplot(aes(x = perc_can, y = perc_456, color = agency)) +
+geom_point(position = "jitter") +
+  stat_smooth(method = "lm", aes(group = 1)) +
+   ggtitle("Site DM 3 \n RPS explained by canopy") +
+  labs(x = "Percent Canopy", y = "Percent RPS 4-6")
+
+
+```
+
+Examine the R squared and intercept for DM 3 only
+
+```{r}
+rps_df_dm3 <- rps_df_test %>%
+  filter(Site == "DM 3")
+
+rps_lm <- lm(perc_456 ~ perc_can, data = rps_df_dm3)
+pander(summary(rps_lm))
+par(mfrow = c(2,2))
+plot(rps_lm)
+
+```
+
+## Relationship between distance to highway and RPS/canopy
+
+```{r}
+rps_df_test2 %>%
+ggplot(aes(x = distance_from_bridge_km, y = perc_456, color = Site)) +
+geom_point(position = "jitter") +
+  stat_smooth(method = "lm", aes(group = 1)) +
+  ggtitle("RPS response to distance from bridge") +
+  labs(x = "Distance to bridge (km)", y = "Percent RPS 4-6")
+
+rps_df_test2 %>%
+ggplot(aes(x = distance_from_bridge_km, y = perc_456, fill = Site)) +
+geom_boxplot() +
+  #stat_smooth(method = "lm", aes(group = 1)) +
+  ggtitle("RPS response to distance from bridge") +
+  labs(x = "Distance to bridge (km)", y = "Percent RPS 4-6") 
+
+```
+
+
+```{r}
+rps_df_avg %>%
+  filter(distance_from_bridge_km != "NA") %>%
+ggplot(aes(x = distance_from_bridge_km, y = perc_456, color = Site)) +
+geom_point(position = "jitter") +
+  stat_smooth(method = "lm", aes(group = 1)) +
+  ggtitle("RPS response to distance from bridge using site averages") +
+  labs(x = "Distance to bridge (km)", y = "Percent RPS 4-6")
+```
+
+
+Linear model for percent 456 explained by distance to bridge (using site average, not transect):
+
+```{r}
+# need to do with average
+rps_lm <- lm(perc_456 ~ distance_from_bridge_km, data = rps_df_avg)
+pander(summary(rps_lm))
+
+par(mfrow = c(2,2))
+plot(rps_lm)
+
+#rps_df_avg_noNA <- rps_df_avg %>%
+#  filter(distance_from_bridge_km != "NA")
+
+#pw_rps_dist_avg <- piecewise.linear(rps_df_avg_noNA$distance_from_bridge_km, rps_df_avg_noNA$perc_456, 
+ #                           middle = 1, CI = TRUE,
+ #                        bootstrap.samples = 1000, sig.level = 0.05)
+
+#pw_rps_dist_avg
+#plot(pw_rps_dist_avg)
+```
+
+
+```{r}
+rps_df_avg %>%
+  filter(distance_from_bridge_km != "NA") %>%
+ggplot(aes(x = distance_from_bridge_km, y = perc_can, color = Site)) +
+geom_point(position = "jitter") +
+  stat_smooth(method = "lm", aes(group = 1)) +
+  ggtitle("Percent canopy cover response \n to distance to bridge") +
+  labs(x = "Distance to bridge (km)", y = "Percent Canopy")
+```
+
+Linear model for percent canopy explained by distance to bridge
+
+```{r}
+rps_lm <- lm(perc_can ~ distance_from_bridge_km, data = rps_df_avg)
+pander(summary(rps_lm))
+
+par(mfrow = c(2,2))
+plot(rps_lm)
+
+```
+
+
+
+Site DM 3 only. Look at percent canopy cover at each transect. Map RPS perc at each transect too.
+
+```{r}
+rps_df_test2 %>%
+  filter(Site == "DM 3") %>%
+ggplot(aes(x = Transect, y = perc_can, color = agency)) +
+geom_point(position = "dodge") +
+  stat_smooth(method = "lm") +
+  ggtitle("Site DM 3 Canopy response at each Transect") +
+  labs(y = "Percent Canopy")
+```
+
+```{r}
+rps_df_test2 %>%
+  filter(Site == "DM 3") %>%
+ggplot(aes(x = Transect, y = perc_456, color = agency)) +
+geom_point(position = "dodge") +
+  stat_smooth(method = "lm") +
+  ggtitle("Site DM 3 RPS response at each Transect") +
+  labs(y = "Percent RPS 4-6")
+  
+# geom_point(aes(x = Transect, y = perc_456)) +
+
+```
+
+
+# generalized lienar model approach
+```{r}
+#there is heteroscedasticity and linear model is not the most approriate. This is count data when you think about it (counting the occurance of RPS 4, 5, or 6; and like a lot of count data, it has a lot of zeros. A poisson model is better.)
+
+# take count of rps and use canopy number as predictor. GLM model.
+glm_rps_can = glm(sum_rps ~ Canopy, data = rps_df_test2, family = poisson)
+#glm_rps_can = glm(sum_rps ~ Canopy*distance_from_bridge_km, data = rps_df_test2, family = poisson)
+
+summary(glm_rps_can) 
+
+# check model
+par(mfrow = c(2,2))
+plot(glm_rps_can)
+
+```
+
+
+
+
+### Change point analysis
+
+ Change point analysis for RPS data, assuming change point based by visual inspection.
+```{r, eval=FALSE, include=FALSE}
+# broken stick model (2 seperate slopes)
+
+# RPS = intercept + distance + (distance- 0.5)
+# first create new variable that is zero for appropriate part
+newvar <- pmax(0, df$distance-0.5)
+
+# next fit a known change point model
+model_fit <- lm(rps ~ distance + newvar, data = df)
+summary(model_fit)
+
+# the slope at zero should be not sig, while the other slope should be, if our assumption is true of change point.
+
+```
+
+Estimating the change point using SiZeR package.
+```{r}
+pw_rps_can <- piecewise.linear(rps_df_dm3$perc_can, rps_df_dm3$perc_456, 
+                            middle = 1, CI = TRUE,
+                         bootstrap.samples = 1000, sig.level = 0.05)
+
+piecewise.linear(rps_df_dm3$perc_can, rps_df_dm3$perc_456, 
+                            middle = 0, CI = TRUE,
+                         bootstrap.samples = 1000, sig.level = 0.05)
+
+bc_rps_can <- bent.cable(rps_df_dm3$perc_can, rps_df_dm3$perc_456, grid.size = 100)
+
+
+pw_rps_can
+
+plot(pw_rps_can)
+```
+
+### rps vs tn
+```{r}
+# compare AGM in each stream to yearly avg rps in each stream
+  # unequal sampling because more RPS taken in Deer Moss Creek
+
+# need df that contains data  from other strems
+
+# calculate average for each stream for each year for RPS
+
+
+# join rps data to wq data
+
+
+# compare rps at each site with agm at each site. is essentially the same as previous comparison because did not sample RPS and wq at each site at same time always. more RPS data.
+
+rps_wq_df %>%
+  ggplot(aes(x = TN, y = perc_456)) +
+  geom_point() +
+  stat_smooth(method = "lm") +
+  ggtitle("AGM TN as a predictor of yearly mean percent 4-6 RPS in each stream") +
+   labs(y = "Percent RPS 4-6", x = "TN (mg/L)")
+
+
+rps_wq_df_lm <- lm(perc_456 ~ TN, data = rps_wq_df)
+
+pander(summary(rps_wq_df_lm))
+
+# check model
+par(mfrow = c(2,2))
+plot(rps_wq_df_lm)
+
+```
+
+### multiple linear regression
+Not doing this for now
+```{r}
+# predictors of canopy, bridge distance, TP, TN, agency
+# response of perc_RPS 456
+
+# reason for doing this: dad is trying to make assertions about the explanatory power of all these predictors, but is comparing the r squared of each simple linear regression, which is wrong.
+
+# convert percentage into a decimal (so bounded between 0 and 1), then apply a logit transformation (ln (p/(1-p))), where p is the proportion.
+
+# it is likely that our predictors are correlated
+
+```
+
