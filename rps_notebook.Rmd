@@ -8,7 +8,7 @@ output:
 
 <http://www.frecologic.com> 
 
-This document reports the analyses done for the MSWRF WQBEL project. This was last assembled:
+This document reports the analyses done for the Niceville RPS project. This notebook was last assembled:
 
 `r Sys.time()`
 
